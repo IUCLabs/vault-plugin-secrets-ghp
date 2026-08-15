@@ -1,0 +1,7 @@
+/dist/
+/vault-plugin-secrets-ghp
+*.out
+*.test
+.env
+test/plugins/
+/mockghp
