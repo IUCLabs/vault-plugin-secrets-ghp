@@ -1,114 +1,138 @@
 # vault-plugin-secrets-ghp
 
-A Vault / OpenBao secrets engine that mints **ephemeral, scoped ghp access
-tokens** on demand.
+A HashiCorp Vault / OpenBao secrets engine that mints short-lived, scoped
+**ghp** access tokens on demand. ghp is a GitHub proxy that issues its own
+tokens in front of GitHub App installations.
 
-## Why
+## Why use this plugin?
 
-Machine callers of [ghp](https://git.unkin.net/unkin/ghp) (the GitHub proxy) —
-CI identities, agents, ... — should never hold standing ghp tokens: a leaked
-token is valid until someone notices and revokes it. This engine removes standing
-tokens entirely:
+Machine callers (CI jobs, agents, services) should not hold long-lived tokens.
+The engine is seeded once with a ghp **service token** (`ghpsvc_...`). Each read
+of `creds/<role>` mints a fresh token scoped by the role, ties it to a Vault
+lease, and deletes it from ghp when the lease expires or is revoked. Every token
+also carries a ghp-side expiry equal to the lease's `max_ttl`, so it expires even
+if revocation never reaches ghp.
 
-- You seed it once with a single ghp **service token** (`ghpsvc_...`) that ghp
-  treats as a synthetic site admin.
-- A **role** binds a ghp App installation (and optional scopes/repositories) to a
-  set of TTLs.
-- Each read of `creds/<role>` mints a fresh token via `POST /api/tokens`, bound
-  to a Vault lease, and **deletes it from ghp when the lease is revoked or
-  expires** (`DELETE /api/tokens/{id}`).
+To manage the engine from Terraform, use the companion provider
+[terraform-provider-vault-secrets-ghp](https://github.com/IUCLabs/terraform-provider-vault-secrets-ghp).
 
-### Why a static service token, not a rotated root credential
+## Requirements
 
-ghp service tokens are configured on the ghp server (`auth.service_tokens` /
-`GHP_AUTH_SERVICE_TOKENS`) and authenticate as a synthetic admin with no database
-row. There is nothing for the engine to rotate in place, so — unlike the sibling
-`vault-plugin-secrets-gitea` engine — this backend deliberately has **no
-`config/rotate-root` path**. The service token is supplied and rotated through
-Vault config by the operator.
+- HashiCorp Vault or OpenBao (tested against Vault 1.18 and OpenBao)
+- Go 1.25+ to build from source
+- A ghp server with a service token configured (`GHP_AUTH_SERVICE_TOKENS`)
 
-### Server-side expiry *and* the Vault lease
+## Installation
 
-Unlike Gitea tokens, ghp tokens **do** expire server-side. Each mint sets a
-`duration` equal to the lease ceiling (`max_ttl`), so the token self-expires even
-if lease revocation never reaches ghp. The Vault lease remains the primary
-expiry: on revoke or `max_ttl`, the engine issues `DELETE /api/tokens/{id}`. A
-delete that returns 404 (token already gone) is treated as success, so revocation
-is idempotent and Vault's retries converge.
+Build the binary (or download it from the
+[releases page](https://github.com/IUCLabs/vault-plugin-secrets-ghp/releases)):
 
-## Paths
+```sh
+make build   # writes ./dist/vault-plugin-secrets-ghp
+```
 
-| Path | Description |
-|------|-------------|
-| `config` | ghp `base_url` + TLS settings + seeded `admin_token` service token. Verifies the token is a ghp admin on write. |
-| `roles/<name>` | Mint policy: `token_type`, `installation_id`, `app_record_id`, `repositories`, `scopes`, `session_prefix`, `ttl`, `max_ttl`. |
-| `roles` | List roles. |
-| `creds/<role>` | Read to mint a short-lived, lease-bound ghp token for the role. |
+Copy it into the server's `plugin_directory` (`$PLUGIN_DIR` below must match
+that setting in the server config), then register and enable it.
+The same commands work with OpenBao: use `bao` instead of `vault`.
 
-## Token types
+```sh
+SHA256=$(sha256sum "$PLUGIN_DIR/vault-plugin-secrets-ghp" | cut -d' ' -f1)
 
-- **agent** (default) — backed by a ghp App installation. Requires
-  `installation_id`; `app_record_id` optionally pins a specific ghp App record
-  (UUID). This is the natural fit for a service credential and works with the
-  synthetic-admin service token.
-- **proxy** — OAuth-backed. Included for completeness; note a service-token
-  identity generally has no linked GitHub OAuth token, so proxy mints require ghp
-  to be configured accordingly.
+vault plugin register -sha256="$SHA256" secret vault-plugin-secrets-ghp
+vault secrets enable -path=ghp vault-plugin-secrets-ghp
+```
 
-## Scopes
+After you replace the binary, re-register it with the new sha256 and reload it:
 
-`scopes` is a comma-separated list of `permission:level` entries (matching ghp's
-`token.ParseScopeString`), where `level` is `read` or `write` and `permission` is
-a GitHub App permission key (`contents`, `pull_requests`, `issues`, ...). An
-empty `scopes` is **open-scoped**. Likewise an empty `repositories` grants all
-repositories in the installation.
+```sh
+vault write sys/plugins/reload/backend plugin=vault-plugin-secrets-ghp
+```
+
+## Configuration
+
+Point the engine at ghp and seed it with the service token. The engine checks
+that the token authenticates as a ghp admin before it saves the config.
+
+```sh
+vault write ghp/config \
+    base_url=https://ghp.example.com \
+    admin_token="$GHP_SERVICE_TOKEN" \
+    ca_cert=@ghp-ca.pem
+```
+
+`admin_token` is write-only and is never returned on read.
 
 ## Usage
 
+Create a role. This one mints 1h **agent** tokens for App installation 4242,
+limited to two repositories:
+
 ```sh
-vault secrets enable -path=ghp vault-plugin-secrets-ghp
-
-# Seed with a ghp service token (ghpsvc_...).
-vault write ghp/config \
-  base_url=https://ghp.unkin.net \
-  admin_token='ghpsvc_...' \
-  ca_cert=@ghp-ca.pem
-
-# A role that mints 1h agent tokens for App installation 4242, scoped to
-# repo contents + PRs.
-vault write ghp/roles/agent token_type=agent installation_id=4242 \
-  scopes=contents:read,pull_requests:write ttl=1h max_ttl=24h
-
-# Mint one. The token is deleted from ghp when the lease is revoked.
-vault read ghp/creds/agent
+vault write ghp/roles/ci \
+    token_type=agent \
+    installation_id=4242 \
+    repositories=example/app,example/tools \
+    scopes=contents:read,pull_requests:write \
+    ttl=1h max_ttl=24h
 ```
+
+Mint a token:
+
+```sh
+$ vault read ghp/creds/ci
+Key                Value
+---                -----
+lease_id           ghp/creds/ci/Yx7...
+lease_duration     1h
+lease_renewable    true
+base_url           https://ghp.example.com
+expires_at         2026-01-01T12:00:00Z
+repositories       [example/app example/tools]
+scopes             map[contents:read pull_requests:write]
+session_id         vault-ci-1a2b3c4d
+token              <ghp token>
+token_id           0b5f...
+token_type         agent
+```
+
+Revoke it early; this deletes the token from ghp:
+
+```sh
+vault lease revoke ghp/creds/ci/Yx7...
+```
+
+### Token types
+
+- `agent` (default): backed by a ghp App installation. Requires
+  `installation_id`; `app_record_id` optionally pins a specific ghp App record.
+- `proxy`: backed by OAuth. The service-token identity normally has no linked
+  GitHub OAuth token, so proxy roles only work if ghp is set up for that.
+
+### Scopes
+
+`scopes` is a comma-separated list of `permission:level` entries. `level` is
+`read` or `write`; `permission` is a GitHub App permission key (`contents`,
+`pull_requests`, `issues`, ...). If `scopes` is empty, the token is not limited
+by permission. If `repositories` is empty, the token covers every repository in
+the installation.
+
+## Documentation
+
+Full path reference:
+
+- [`config`](docs/config.md): connection to ghp and the seeded service token
+- [`roles`](docs/roles.md): token-minting roles
+- [`creds`](docs/creds.md): mint, renew and revoke tokens
 
 ## Development
 
 ```sh
-make build      # build the plugin binary into ./dist
-make test       # unit tests (race)
-make e2e        # full lifecycle vs mock ghp on Vault + OpenBao (Docker)
-make rpm        # build Vault + OpenBao RPMs via nfpm
+make build   # build ./dist/vault-plugin-secrets-ghp
+make test    # unit tests
+make lint    # go vet
+make e2e     # full lifecycle against a mock ghp on Vault and OpenBao (Docker)
 ```
 
-Releases are tag-driven (`make patch|minor|major`): a Woodpecker pipeline builds
-the Vault and OpenBao RPMs and uploads them to the internal artifactapi yum repo.
+## License
 
-## Deployment (out of scope for this repo; documented for the operator)
-
-Live registration mirrors the sibling `vault-plugin-secrets-gitea` /
-`vault-plugin-secrets-rancher` engines:
-
-1. **Release**: tag `v0.1.0` (`make minor` from `v0.0.0`). CI publishes
-   `rpm-internal/files/Packages/{vault,openbao}-plugin-secrets-ghp-<ver>-1.x86_64.rpm`.
-2. **terraform-vault**: plugin catalog entry with the release `sha256`, engine
-   policies, and `ghp_secret_backend` + `ghp_secret_backend_role` module
-   instances (via the companion terraform provider).
-3. **Seed the service token in KV** before the backend module applies, e.g.
-   `kv/service/vault/au/syd1/secret_backend/ghp/config` with `admin_token` set to
-   a ghp service token configured in `GHP_AUTH_SERVICE_TOKENS`.
-4. **Reload after a binary upgrade**:
-   `vault write sys/plugins/reload/backend plugin=vault-plugin-secrets-ghp`.
-   Bump the RPM version in puppet-prod and the catalog `sha256` in terraform-vault
-   *together* so the on-disk binary stays in lockstep with the catalog.
+[MIT](LICENSE)

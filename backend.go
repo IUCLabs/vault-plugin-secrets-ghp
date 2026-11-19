@@ -12,11 +12,11 @@
 // Why a static service token and not a rotated root credential: ghp service
 // tokens are configured out-of-band on the ghp server (auth.service_tokens /
 // GHP_AUTH_SERVICE_TOKENS) and authenticate as a synthetic admin with no
-// database row. There is nothing for the engine to rotate in place, so unlike
-// the sibling gitea engine this backend deliberately has no config/rotate-root
-// path; the service token is supplied and rotated by Vault/operator config.
+// database row. There is nothing for the engine to rotate in place, so this
+// backend deliberately has no config/rotate-root path; the service token is
+// supplied and rotated by Vault/operator config.
 //
-// Unlike Gitea, ghp tokens *do* expire server-side: each mint sets a duration so
+// ghp tokens also expire server-side: each mint sets a duration so
 // the token self-expires around the lease ceiling as defence in depth, while the
 // Vault lease remains the primary expiry — lease revocation deletes the token.
 package ghp

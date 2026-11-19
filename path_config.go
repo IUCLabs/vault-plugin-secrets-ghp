@@ -10,8 +10,6 @@ import (
 
 const configStoragePath = "config"
 
-const defaultBaseURL = "https://ghp.unkin.net"
-
 // ghpConfig is the connection to ghp plus the seeded service token the engine
 // authenticates with to mint and revoke tokens.
 type ghpConfig struct {
@@ -32,8 +30,7 @@ func pathConfig(b *ghpBackend) *framework.Path {
 		Fields: map[string]*framework.FieldSchema{
 			"base_url": {
 				Type:        framework.TypeString,
-				Description: "Base URL of the ghp server (default https://ghp.unkin.net).",
-				Default:     defaultBaseURL,
+				Description: "Base URL of the ghp server, e.g. https://ghp.example.com. Required.",
 			},
 			"admin_token": {
 				Type:        framework.TypeString,
@@ -110,8 +107,6 @@ func (b *ghpBackend) pathConfigWrite(ctx context.Context, req *logical.Request, 
 
 	if v, ok := data.GetOk("base_url"); ok {
 		config.BaseURL = v.(string)
-	} else if config.BaseURL == "" {
-		config.BaseURL = defaultBaseURL
 	}
 	if v, ok := data.GetOk("admin_token"); ok {
 		config.AdminToken = v.(string)

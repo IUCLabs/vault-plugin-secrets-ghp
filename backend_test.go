@@ -175,7 +175,7 @@ func TestLifecycle(t *testing.T) {
 		"token_type":      "agent",
 		"installation_id": 4242,
 		"scopes":          "contents:read,pull_requests:write",
-		"repositories":    "unkin/ghp,unkin/teabot",
+		"repositories":    "example/app,example/tools",
 		"ttl":             "1h",
 		"max_ttl":         "24h",
 	})
@@ -318,7 +318,7 @@ func TestProxyRoleAllowedWithoutInstallation(t *testing.T) {
 	configure(t, b, s, srv.URL, "ghpsvc_seed")
 
 	req(t, b, s, logical.CreateOperation, "roles/proxy", map[string]interface{}{
-		"token_type": "proxy", "repositories": "unkin/ghp",
+		"token_type": "proxy", "repositories": "example/app",
 	})
 	creds := req(t, b, s, logical.ReadOperation, "creds/proxy", nil)
 	if creds.Secret == nil {
@@ -372,6 +372,25 @@ func TestConfigRequiresTokenAndVerifies(t *testing.T) {
 	}
 	if read.Data["base_url"].(string) != srv.URL {
 		t.Errorf("base_url = %q, want %q", read.Data["base_url"], srv.URL)
+	}
+}
+
+func TestConfigRequiresBaseURL(t *testing.T) {
+	b, s := newTestBackend(t)
+	resp, err := b.HandleRequest(context.Background(), &logical.Request{
+		Operation: logical.CreateOperation,
+		Path:      "config",
+		Data:      map[string]interface{}{"admin_token": "ghpsvc_seed"},
+		Storage:   s,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if resp == nil || !resp.IsError() {
+		t.Fatal("expected error when base_url missing")
+	}
+	if !strings.Contains(resp.Error().Error(), "base_url is required") {
+		t.Errorf("unexpected error: %v", resp.Error())
 	}
 }
 
