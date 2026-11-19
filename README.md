@@ -24,8 +24,8 @@ To manage the engine from Terraform, use the companion provider
 
 ## Installation
 
-Build the binary (or download it from the
-[releases page](https://github.com/IUCLabs/vault-plugin-secrets-ghp/releases)):
+Install the x86_64 RPM (vault or openbao flavour) from the
+[releases page](https://github.com/IUCLabs/vault-plugin-secrets-ghp/releases), or build one:
 
 ```sh
 make build   # writes ./dist/vault-plugin-secrets-ghp
