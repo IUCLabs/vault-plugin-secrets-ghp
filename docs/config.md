@@ -1,6 +1,6 @@
 # config
 
-Holds the connection to ghp and the service token the engine uses to mint and
+Holds the connection to [ghp](https://github.com/goodtune/ghp) and the service token the engine uses to mint and
 delete tokens. There is one config per mount.
 
 | Method   | Path         |

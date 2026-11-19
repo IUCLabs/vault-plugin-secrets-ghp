@@ -1,7 +1,7 @@
 # vault-plugin-secrets-ghp
 
 A HashiCorp Vault / OpenBao secrets engine that mints short-lived, scoped
-**ghp** access tokens on demand. ghp is a GitHub proxy that issues its own
+**[ghp](https://github.com/goodtune/ghp)** access tokens on demand. ghp is a GitHub proxy that issues its own
 tokens in front of GitHub App installations.
 
 ## Why use this plugin?
