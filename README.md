@@ -24,25 +24,102 @@ To manage the engine from Terraform, use the companion provider
 
 ## Installation
 
-Install the x86_64 RPM (vault or openbao flavour) from the
-[releases page](https://github.com/IUCLabs/vault-plugin-secrets-ghp/releases), or build one:
+Release assets download through artifactapi's GitHub proxy, which serves
+`https://artifactapi.k8s.syd1.au.unkin.net/api/v1/remote/github/IUCLabs/vault-plugin-secrets-ghp/releases/download/<tag>/<file>`.
+Each method below ends with `SHA256` set for [registration](#register-and-enable).
+With OpenBao, use `bao` in place of `vault`.
 
 ```sh
-make build   # writes ./dist/vault-plugin-secrets-ghp
+TAG=vX.Y.Z  # the release to install
+V=${TAG#v}
+BASE=https://artifactapi.k8s.syd1.au.unkin.net/api/v1/remote/github/IUCLabs/vault-plugin-secrets-ghp/releases/download/$TAG
 ```
 
-Copy it into the server's `plugin_directory` (`$PLUGIN_DIR` below must match
-that setting in the server config), then register and enable it.
-The same commands work with OpenBao: use `bao` instead of `vault`.
+### RPM
+
+Install the Vault RPM or the OpenBao RPM, not both. Set the server's
+`plugin_directory` to the directory the RPM installs into.
+
+Vault: installs `/usr/libexec/vault-plugins/vault-plugin-secrets-ghp`.
 
 ```sh
-SHA256=$(sha256sum "$PLUGIN_DIR/vault-plugin-secrets-ghp" | cut -d' ' -f1)
+dnf install vault-plugin-secrets-ghp  # from a yum repo carrying it, or from the release:
+dnf install "$BASE/vault-plugin-secrets-ghp-$V-1.x86_64.rpm"
 
+SHA256=$(sha256sum /usr/libexec/vault-plugins/vault-plugin-secrets-ghp | cut -d' ' -f1)
+```
+
+OpenBao: installs `/usr/libexec/openbao-plugins/vault-plugin-secrets-ghp`.
+
+```sh
+dnf install openbao-plugin-secrets-ghp  # from a yum repo carrying it, or from the release:
+dnf install "$BASE/openbao-plugin-secrets-ghp-$V-1.x86_64.rpm"
+
+SHA256=$(sha256sum /usr/libexec/openbao-plugins/vault-plugin-secrets-ghp | cut -d' ' -f1)
+```
+
+### Released binary
+
+`vault-plugin-secrets-ghp_<version>_SHA256SUMS` lists the binary and the RPMs.
+
+```sh
+curl -fLO "$BASE/vault-plugin-secrets-ghp_${V}_linux_amd64"
+curl -fLO "$BASE/vault-plugin-secrets-ghp_${V}_SHA256SUMS"
+sha256sum --check --ignore-missing "vault-plugin-secrets-ghp_${V}_SHA256SUMS"
+
+install -m 0755 "vault-plugin-secrets-ghp_${V}_linux_amd64" <plugin_directory>/vault-plugin-secrets-ghp
+SHA256=$(sha256sum <plugin_directory>/vault-plugin-secrets-ghp | cut -d' ' -f1)
+```
+
+### Kubernetes image volume
+
+`ghcr.io/iuclabs/vault-plugin-secrets-ghp:<tag>` is a `FROM scratch` image holding only
+`/vault-plugin-secrets-ghp`. Mount it read-only into the Vault/OpenBao container with an
+[image volume](https://kubernetes.io/docs/concepts/storage/volumes/#image):
+Image volumes are beta from Kubernetes 1.33 but off by default (enable the
+`ImageVolume` feature gate), on by default from 1.35, and GA in 1.36. Vault and OpenBao only run a binary that sits directly in
+`plugin_directory`, not in a subdirectory, so mount the file itself with
+`subPath`, which on image volumes needs 1.33+.
+
+```yaml
+spec:
+  containers:
+    - name: vault
+      volumeMounts:
+        - name: plugin-ghp
+          mountPath: /vault/plugins/vault-plugin-secrets-ghp  # <plugin_directory>/vault-plugin-secrets-ghp
+          subPath: vault-plugin-secrets-ghp
+          readOnly: true
+  volumes:
+    - name: plugin-ghp
+      image:
+        reference: ghcr.io/iuclabs/vault-plugin-secrets-ghp:vX.Y.Z
+        pullPolicy: IfNotPresent
+```
+
+The image holds the released binary, so its sha256 is the `linux_amd64` line
+of `SHA256SUMS`:
+
+```sh
+SHA256=$(curl -fsSL "$BASE/vault-plugin-secrets-ghp_${V}_SHA256SUMS" | awk '/_linux_amd64$/ {print $1}')
+```
+
+### From source
+
+```sh
+make build  # writes ./dist/vault-plugin-secrets-ghp
+```
+
+Copy it into `plugin_directory` and take `SHA256` from `sha256sum` as above.
+
+### Register and enable
+
+```sh
 vault plugin register -sha256="$SHA256" secret vault-plugin-secrets-ghp
 vault secrets enable -path=ghp vault-plugin-secrets-ghp
 ```
 
-After you replace the binary, re-register it with the new sha256 and reload it:
+After replacing the binary, register the new sha256 and reload the plugin:
 
 ```sh
 vault write sys/plugins/reload/backend plugin=vault-plugin-secrets-ghp
